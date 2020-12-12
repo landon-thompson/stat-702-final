@@ -1,0 +1,283 @@
+---
+title: "STAT 702 - Final Project"
+author: ''
+date: "Tuesday April 17, 2018"
+output:
+  pdf_document:
+    fig_caption: yes
+    includes:
+      in_header:
+      - common/others.tex
+      - common/preamble-latex.tex
+      - common/port-land.tex
+      - common/pdf-landscape.tex
+    keep_tex: yes
+    toc: yes
+  html_notebook:
+    fig_caption: yes
+  html_document:
+    toc: yes
+---
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+
+library(knitr)
+library(rpart)
+library(ggplot2)
+library(gridExtra)
+library(rpart.plot)
+library(rpart)
+
+opts_chunk$set(message=FALSE, warning=FALSE)
+```
+
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+source("Final.r")
+```
+
+\allowdisplaybreaks
+\newpage
+
+# Abstract
+
+This paper provides an introduction on the background of this data set and indicates the goals of our modelling efforts in relation to the stated problem. Following this section, we provide a methodology of several various models after initial data set and variable consideration with the appropriate changes being made. We present the corresponding test error rates using the validation set approach and *K*-fold cross validation of these models along with other model analyzing metrics and provide a suggestion on the model which provides the best predictive ability for the *known* keystroke dynamic data set.  Following this suggestion, the *unknown* keystroke dynamic data set was used to bolster the findings of the suggested model along with a summary of conclusions of our findings.
+
+# Introduction
+
+The use of keystroke dynamics collects information on the typing patterns of a person(s) in a detailed timing manner, which can and has been used to develop additional security measures for online and/or passcode sites (i.e. banks, etc.) [1] and/or identify different individual(s). In this current paper, two data sets were provided with keystroke dynamic information in which subjects entered the same passcode, ".tie5Roan1" to gain access to a protected system. One data set contained known subjects who entered keystroke information and the other with unknown subjects entering the same information (hereafter referred to as *known* and *unknown*, respectively).  The both data sets listed data in a hierarchal format to identify each time the passcode was entered (i.e., an individual observation) with the *known* data set consisting of the known subject (*subject*), a designated session (*sessionIndex*), and the number of times (i.e., replicates) each subject entered the passcode for a given session (*rep*). The *unknown* data set contained designated sessions (*sessionID*) along with number of times the passcode was entered for each session (*rep*) but no information on who entered it. Both data sets contained an additional 31 variables consisting of the keystroke dynamic information for the listed passcode; a detailed description for each of these variables is listed in Appendix \ref{appendix:known.vars}.
+
+The overall goals of this project and resulting paper were to first develop several different models (i.e., classifiers) following exploratory analysis and variable selection using the *known* data set in order to find a model with the best predictive ability for determining subjects from unknown keystroke dynamics information. Our second goal was to analyzing performance metrics of these developed models to determine the model with the best predictive ability (i.e., lowest test error rate) from the *known* data set. Our final goal included the use of the *unknown* data set within the final selected model to try to improve the model's accuracy. The steps used to address these goals are listed in the following sections.
+
+# Methods and Results
+
+
+## Exploratory Data Analysis and Variable Selection
+
+Prior to developing any models, exploratory graphs were developed in order to assist in variable selection and model development. Also, to make plotting and visual analysis easier, the original names/values of the `subject` variable are replaced, this could be seen in Appendix \ref{appendix:shortened.subject.map}. The first set of graphs developed consisted of a several series of ridge plots depicting the distributions of time (milliseconds) for each subject: individual character hold in the passcode (Hold), key transition for down-down (DD), and key transition for up-down (UD). Since this plotting looked at each individual, a large amount of plots were developed; therefore, only several sample ones (Figure \ref{figure:heatmap}) are presented here, while the remaining plots are listed in Appendix 2.  While these plots were informative, the overall number of subjects and variables made these plots quite cumbersome to analyze; therefore, an additional heat map was created depicting the same information but allowing us to look at each subject across all three differing keystroke information sets as listed above (Figure 2). Along with exploring the *known* data set at the subject level, ridge, violin, and box plots were made depicting the total distributions of all combined subjects along with outliers with the same keystroke information sets (Figure \ref{figure:overall-distribution-keyhold}, \ref{figure:overall-distribution-DD}, \ref{figure:overall-distribution-UD}).
+
+```{r, message=FALSE, warning=FALSE, include=FALSE, error=FALSE}
+source("Final-Plotting.r")
+```
+
+```{r,echo=FALSE, error=FALSE, fig.cap="Heat map of every subject for three different sets of keystroke data sets (i.e., Key Up-Down, Key Down-Down, and Key hold). \\label{figure:heatmap}", fig.height=4, fig.width=5, message=FALSE, warning=FALSE}
+plotHeatMap(known.Long.PerSubject)
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.cap="Ridge plot, violin plot, and barplot of depicting overall distribution of Up-Down keystroke information. \\label{figure:overall-distribution-keyhold}"}
+plotKeyActionSummary(known.Long.PerSubject %>% filter(Key.Action == KEY_ACTION_HOLD), "Key Action - Hold")
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.cap="Ridge plot, violin plot, and barplot of depicting overall distribution of Down-Down keystroke information. \\label{figure:overall-distribution-DD}"}
+plotKeyActionSummary(known.Long.PerSubject %>% filter(Key.Action == KEY_ACTION_DOWN_DOWN), "Key Action - Down-Down")
+```
+
+```{r,echo=FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.cap="Ridge plot, violin plot, and barplot of depicting overall distribution of Up-Down keystroke information. \\label{figure:overall-distribution-UD}"}
+plotKeyActionSummary(known.Long.PerSubject %>% filter(Key.Action == KEY_ACTION_UP_DOWN), "Key Action - Up-Down")
+```
+
+Analysis of the ridge plots indicated a large amount of similar distributions occurring over a wide range of subjects and keystroke information. Likewise, the heat maps depicted differences occurring between different subjects within each keystroke set. However, this graph also pointed to the possibility of collinearity occurring do to the similar trends seen between the key transition for DD and UD, which is addressed later in this section. For the overall distribution plots, very similar patterns were seen in the UD and DD information, while the Hold information contained much wider distributions. Also, these same plots, especially the boxplots, indicated that the data set maintains a high amount of potential outliers. While several different approaches could be taken to address this issue such as removing observations for justifiable reasons, due to the limited amount of background knowledge on this data set, we felt it would be unwise to remove such observations without knowing the true nature behind their variation. Therefore, we decided to use a conservative approach by including all the data points within our models, knowing reduced model predictability may occur, in order to maintain a high level of statistical integrity. Such data points could be reviewed and removed at a later date after more background information is garnered on those observations in question.
+
+As mentioned before, several of the plots suggested the possibility of collinearity between variables; therefore, both scatterplot and correlation matrices were created to test if this occurred. These matrices indicated collinearity occurred between the keystroke information between UD and DD keystroke times for all typed components of the passcode with a pearson correlation coefficient greater than 0.9 and clearly depicted linear relationship seen in Figure \ref{figure:collinearity} (due to the overall size of the scatterplot matrix from the 51 subjects, only plots of the variables with collinearity are shown here). 
+
+```{r, echo = FALSE,message=FALSE, warning=FALSE, error=FALSE, fig.cap="Scatterplot matrix between Down-Down and Up-Down keystroke infomation for all variables showing collinearity. \\label{figure:collinearity}"}
+source("Final-ExploringCorrelation-CorrelationPlot.r")
+corr.plot
+```
+
+
+
+In order to reduce potential problem with model performance and overfitting from collinearity, we decided to remove either the UD or the DD variables. To help choose which variable to remove, we created two models with the first containing all variables except UD variables and the second with all variables except DD variables.  A quadratic discriminant analysis (QDA) model was fit to determine which set of predictors made a better model based on calculated test errors. From the validation set approach (VSA), the test error was lower for the model that used the UD variables; therefore, it was decided that for all future parametric models, all DD variables would be removed.
+
+
+
+Another consideration taken into account was the *sessionIndex* variable in the *known* data set. This variable had only two different values; 7 or 8 with some subjects having a 7, some an 8, and others having both. Such differences led us to question if potential differences between the 7's and 8's for each covariate occurred. Because the distribution of the covariates for each of the groups is not known, 31 non-parametric tests were run to determine significance for each variable. Additionally, we decided to only use those observations that had both a 7 and an 8 which were analyzed with a Wilcoxon rank-sign test. The p-values for each of the variables can be found in the appendix. To adjust for multiple testing, we used the Bonferroni and Benjamini-Hochberg correction factors. The Bonferroni correction factor was extremely conservative, while the Benjamini-Hochberg *P*-value indicated a significant difference (i.e., rejected the null hypothesis) between means of the first 5 variables rejected the null hypothesis assuming an $\alpha = 0.05$. Therefore, we proceeded with caution, but choose use both the 7 and 8 together in the training data set. The *known* data set was split with a 70/30 ratio between training/test data sets; barplots of the training and test data sets were created and ensured that all subjects were represented in both data sets (Figure \ref{figure:train.test})
+
+```{r,echo = FALSE, message=FALSE, warning=FALSE, error=FALSE, fig.cap="Barplots of number of subject observations included in the known, training, and test, datasets. \\label{figure:train.test}"}
+rbind(
+  known %>% 
+    select(subject) %>% 
+    mutate(source = "All"),
+  known.Test %>%  
+    select(subject) %>% 
+    mutate(source = "Test"),
+  known.Train %>%  
+    select(subject) %>% 
+    mutate(source = "Train")
+) %>% 
+  ggplot(aes(x = subject)) + 
+  geom_bar() + 
+  facet_wrap(~ source, ncol = 1) + 
+  labs(
+    title = "Distibution of subjects across known data set",
+    y = "Count",
+    x = "subject"
+  )
+```
+
+## Model Methodology
+
+Due to the nature of the categorical response variable, regular binary modeling techniques as they are structured in our book would be ill suited for modelling. However, we decided to use a one-vs-all approach in order to create a "quasi-binary" outcome for each of the 51 subjects for several of the models mentioned below. The process of this technique occurred as follows: 1) one class was chosen, 2) a new dependent variable is created with a value of 1 if the observation is in the class or 0 if otherwise and 3) a given model is fit using the original covariates on the created binary dependent variable [2]. This process is performed iteratively for all of the different subject values resulting in 51 different models each with a different set of estimated parameters that are estimated using the typical logistic regression maximum likelihood estimation. 
+
+##Parametric Modelling
+
+In order to implement this algorithm within a parametric model, we created a function that fits a logistic regression model which iterated through different cutoff points in order to determine the best cutoff for that particular logistic regression model. After running this function on the *known* data set, warnings occurred indicating the algorithm did not converge along with fitted probabilities of 0 or 1. Analysis of the model output found that many of the parameter estimates did not make sense including standard error estimates that were extremely large for many of the parameter estimates. These results suggested that the model created a situation where full separation or quasi-separation occurred, likely due to the one-vs-all approach. This situation resulted due to limited crossover between the covariates for the two response outcomes which caused the results to become unreliable.  (A 2-d visualization of this is given below.)
+
+```{r,echo=FALSE,fig.width = 8, fig.height=3, fig.cap="Example of 2-d separation \\label{figure:separation}"}
+x <- c(1,2,3,4,5,6,7,8)
+y <- c(0,0,0,0,1,1,1,1)
+frame <- as.data.frame(cbind(x,y))
+
+library(ggplot2)
+ggplot(data = frame)+geom_point(aes(x=x, y = y))+ggtitle("Example of 2-d Perfect Separation")
+```
+
+To address this issue within the logistic regression, we performed ridge and LASSO parameter estimation techniques. These methods were used since the estimation is more flexible in allowing parameters that are not important, or present multicollinearity to be effectively removed from the model. Coefficient estimates for some of the fitted ridge and LASSO regression models can be found in the appendix.
+
+
+Two additional models considered in development using the known data set were a linear discriminant analysis (LDA), and quadratic discriminant analysis (QDA) which were created, performed, and tested for accuracy using the VSA. Unlike, the logistic model mentioned above, this model produced reliable results which resulted in a VSA test error of 27.77%. Due to this relatively large error rate (given the current data set and goals) at hand along with unreliable results from the logistic regression model, it appeared that the usage of non-parametric techniques would be more suitable and are discussed in the next section.
+
+
+
+
+## Non- and Semi-Parametric
+
+### K-nearest neighbors
+
+Another modeling method analyzed on the *known* data set was K-nearest neighbors (KNN) classification. We decided to used 10-fold cross validation to obtain 10 separate test error rates to determine a value for *K*. These test error rates were then averaged to obtain a single error rate for a given value of *K*, which were incremented through values of *K* from 1 to 100. After doing this, we get the following plot referenced in the Figure \ref{figure:KNN}. This plot showed that a generally increasing trend in the error rate occurred as the value of *K* increased. The value of $K=1$ resulted in the lowest error rate. This may be due to the correlation within each of the repetitions within each session. The error rate corresponding to a $K=1$ was 23.29%, indicating poor model performance. 
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+source('Final-Modelling.KNN.r')
+```
+
+```{r,echo=FALSE,warning=FALSE,fig.width = 8, fig.height=3, fig.cap="Mean 10-fold CV error rates for different K in KNN classifier. \\label{figure:KNN}" }
+plot.KNN
+```
+
+### Classification Tree
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+source("Final-Modelling.Trees.r")
+```
+
+Additionally several tree methods were also used to develop models for the *known* data set. Unlike the previous parametric models produced, all predictive variables were used within these models due to the way the algorithm creates splits within the data. We allowed the classification tree to select the best splits amongst all the data; however, it is recognized that single classification trees can suffer from overfitting the data and be sensitive to slight changes of the within the data used for analysis [3]. As such, our efforts at using the classification tree model should be viewed as exploratory and an introduction into the other tree methods used below. A multi-class classification tree was created using the *rpart* library, as research into the *tree* library indicated its inability to handle more than 32 classes for analysis. Prior to fitting the tree, the hyperparameters of *cp*, *minbucket (min # of observation in terminal node)* and *maxdepth (max depth of tree)* were optimized using the *tune* function and analysis of 10-fold cross validation test errors. Using the optimal hyperparameters, a classification tree was created and resulted in an average test error of $`r round(Rpart.testError*100, 2)`\%$ from a 6-fold cross validation on all data in *known.csv*. This model resulted in a relatively poor model fit, which was not unexpected.
+
+### Random Forest
+```{r, message=FALSE, warning=FALSE, include=FALSE, error=FALSE}
+source("Final-Modelling.RandomForest.r")
+```
+
+Due to poor performance of the classification tree model, we explored other forms of tree methods, specifically bagging and random forests. As mentioned above, all the predictive variables were used within these as well methods due to the use of the bootstrap method used for building the forests, which addresses any potential collinearity issues [3]. This is accomplished as the randomly sampled subsets for each bootstrap tree gives the correlated predictors a chance to be used [3]. Given the computation intensiveness of these algorithms, we decided to limit the space in with the hyerparameters, *ntree* and *mtry*, were analyzed for optimizing the models. For each optimizing combination of hyperparameters, an Out-of-Bag (OOB) and test error for both VSA and 6-fold cross validation was obtained and plotted in Figure \ref{fig-rf-mtry-errors}. 
+
+
+According to Breiman and Cutler [4], *...In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error...*. Therefore, following this train of thought, the errors obtained without cross validation were noticeably larger for OBB across the board as seen in Figure \ref{fig-rf-mtry-errors}. This fact suggested that using the OOB error as a form of model goodness, a better model could be achieved; therefore, the *mtry* of `r optimalMTRY` was used for fitting a random forest of 1000 trees. This new model resulted in a test error of $`r round(RF.TestError*100, 2)`\%$ with the training dataset, which showed quite an improvement over the first. Also, Figure \ref{fig-rf-mtry-errors} depicted that increasing *mtry* resulted in increased error rates; therefore, bagging was not performed as it would have used the highest *mtry* value which would have resulted in higher error rates.
+
+Fiting this new model with the traiing dataset, a test error of $`r round(RF.TestError*100, 2)`\%$ is obtained. This is quite an improvement when compared to 
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+source("Final-Modelling.Trees.r")
+```
+
+Using the full formular, a multi-class classification tree is created using the *rpart* library (*We tried tree, but it doesn't seem to be able to handle more that 32 classes*). Before fitting the tree, the *tune* function is ussed to tune the *cp*, *minbucket (min # of observation in terminal node)* and *maxdepth (max depth of tree)* hyperparameters, achieved through 10-fold cross validation. Using the optimal hyperparameters, a multi-class classiifcation tree is created. Using 6 fold cross validation on all data in *known.csv*, an average test error of $`r round(Rpart.testError*100, 2)`\%$ is obtained. This is quite poor. 
+
+```{r, echo=FALSE, fig.height=5, fig.width=9, message=FALSE, warning=FALSE, fig.cap="Error rates accross mtry values\\label{fig-rf-mtry-errors}"}
+RF.PlotHelper(RF.errors.500, RF.errors.1000)
+```
+
+## Support Vector Machine
+
+
+### Random Forest
+```{r, message=FALSE, warning=FALSE, include=FALSE, error=FALSE}
+source("Final-Modelling.SVM.r")
+```
+
+
+To fit a Support Vector Machine model, the *e1071* library is used. Unlike the One-vs-All approach we've used prior, this library uses One-vs-One to handle multiclass. For the SVM, we explore 3 kernel basis function, *linear*, *polynomial*, and *radial*. The tune function is used to obtain the optimal hyperparameters:
+
+* linear - cost(c)
+* polynomial - cost(c), degree
+* radial - cost(c), gamma
+
+Using the optimal hyperparameters, we fit 3 SVM models. Table \ref{table:error.svm.models} shows the performance of all 3 models, where the linear and radial kernels perform best.
+
+\begin{table}[!htb]
+  \caption{Error rates for all 3 SVM models, with various kernel function}
+  \label{table:error.svm.models}
+  \begin{tabular}{ l | c | r }
+    \text{linear} & `r round(svm.Linear.TestError*100, 2)`\%\\
+    \text{polynomial} & `r round(svm.Polynomial.TestError*100, 2)`\%\\
+    \text{radial} & `r round(svm.Radial.TestError*100, 2)`\% \\
+  \end{tabular}
+\end{table}
+
+
+## Final Model with Unknown Data Set
+
+(Add paragraph on why we selected random forest as best along with supporting evidence - table of test error rates from all models)
+
+In an attempt to improve the predictive ability of our selected model, the *unknown* data set was analyzed and used as part of the model building process. To do this, initial attempts at clustering with both k-means and Mclust clustering algorithms, indicated that unclear cuts between groups were not formed. Therefore, a level of subjectivity would need to be incorporated in order to decide what cluster belonged to what subject. Instead of this procedure, we decided to infer predictions based on a random forest. A tuned random forest was first trained on the *known* data set then used to predict the *subjects* in the *unknown* data set. Each row associated with a unique *sessionID* was predicted, however it was not the same prediction for each row because of the differences in the covariates. The *subject* with the highest number of predictions within each *sessionID* was then assumed to represent the unkown subject for that *sessionID*. After the subjects were predicted and assigned in the *unknown* data set, this data was appended to the *known* training data set and validated on the *known* test data set. (Need to add results found from this procedure)
+
+# Conclusions
+
+
+
+# Report References
+
+[1] Parimarjan, Negi. Adversarial machine learning against keystroke dynamics. PDF on http://www.Semanticsscholar.org. Accessed: April 23, 2018.
+
+[2] Rifkin, Ryan. Multiclass classification. PDF on http://www.mit.edu/~9.520/spring09/Classes/ multiclass.pdf. Accessed: April 26, 2018.
+
+[3] Breiman, Leo, and Adele Cutler. Random Forests. HTML on https://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr. Accessed: April 26, 2018.
+
+
+# Code References
+1) Source: https://tex.stackexchange.com/questions/2832/how-can-i-have-two-tables-side-by-side. Accessed April 26, 2018.
+
+2) Source: https://stackoverflow.com/questions/38036680/align-multiple-tables-side-by-side. Accessed April 26, 2018.
+
+3) Source: https://tex.stackexchange.com/questions/8652/what-does-t-and-ht-mean. Accessed April 26, 2018.
+
+4) Source: https://stackoverflow.com/questions/45409750/get-rid-of-addlinespace-in-kable. Accessed April 26, 2018.
+
+5) Source: https://www.r-bloggers.com/ggplot2-easy-way-to-mix-multiple-graphs-on-the-same-page/. Accessed April 27, 2018
+
+# Appendices
+
+## \label{appendix:known.vars}
+
+```{r, echo=FALSE}
+kable(
+  known.DataDictionary, 
+  caption = "Dictionary for the *known.csv*")
+```
+
+## \label{appendix:shortened.subject.map}
+
+\begin{table}[!htb]
+  \caption{Mapping for the renamed \textit{subject} variable}
+  \label{table:shortened.subject.map}
+  \begin{minipage}{.33\linewidth}
+    \centering
+      `r kable(known.ShortenedSubjectMap[1:17, ], format = "latex", booktabs = T, linesep = "")`
+  \end{minipage}%
+  \begin{minipage}{.33\linewidth}
+    \centering
+      `r kable(known.ShortenedSubjectMap[18:34, ], format = "latex", booktabs = T, linesep = "")`
+    \end{minipage} %
+  \begin{minipage}{.33\linewidth}
+    \centering
+      `r kable(known.ShortenedSubjectMap[35:51, ], format = "latex", booktabs = T, linesep = "")`
+    \end{minipage} 
+\end{table}
+
+\newpage
+
+## \label{appendix:wilcoxon}
+```{r,echo=FALSE,message=FALSE, warning=FALSE, fig.cap="Table of p-values for differences in SessionIndex for each variable. \\label{appendix:wilcoxon}"}
+p.val.dat <- read.csv('Testing.csv',header=T)
+p.val.dat <- na.omit(p.val.dat[-c(6,7)])
+names(p.val.dat) <- c("Variable", "Test Statistic", "P-Value", "Bonferroni","Benjamini-Hochberg")
+kable(p.val.dat,
+        caption = "Table of p-values for differences in SessionIndex for each variable")
+```
